@@ -23,7 +23,9 @@
   box-shadow:0 0 8px rgba(0,229,255,.6),inset 0 0 4px rgba(0,229,255,.6)}
 ::-webkit-scrollbar-corner{background:transparent}
 html,body{margin:0;min-height:100%}
-html{background:var(--bg)}
+html{background:var(--bg);scrollbar-gutter:stable}
+/* while a modal is up the page behind it stays put: no wheel, drag or key scrolling leaks through */
+html.locked,html.locked body{overflow:hidden}
 body{
   background:var(--bg);
   color:var(--txt);
@@ -330,11 +332,11 @@ select:focus,input:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 8p
 .feed tr{cursor:pointer}
 .feed tr:hover td{background:rgba(0,229,255,.06)}
 .modal{position:fixed;inset:0;z-index:60;background:rgba(2,4,7,.72);backdrop-filter:blur(4px);
-  display:none;align-items:center;justify-content:center}
+  display:none;align-items:center;justify-content:center;overscroll-behavior:contain}
 .modal.show{display:flex;animation:fade .2s ease}
 @keyframes fade{from{opacity:0}to{opacity:1}}
 .sheet{width:420px;max-width:94vw;max-height:88vh;overflow:auto;background:linear-gradient(180deg,#0b1119,#070b11);
-  border:1px solid var(--cyan);border-radius:14px;box-shadow:0 0 40px rgba(0,229,255,.25);position:relative}
+  border:1px solid var(--cyan);border-radius:14px;box-shadow:0 0 40px rgba(0,229,255,.25);position:relative;overscroll-behavior:contain}
 .sheet.mag{border-color:var(--mag);box-shadow:0 0 40px rgba(255,45,149,.25)}
 .sheet .hd{padding:16px 18px;border-bottom:1px solid var(--line);position:sticky;top:0;background:#0b1119ee;backdrop-filter:blur(6px)}
 .sheet .hd h2{margin:0;font-size:20px;letter-spacing:1px;color:var(--cyan);text-transform:none}
@@ -649,6 +651,7 @@ select:focus,input:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 8p
       <h2>Hardware</h2>
       <div class="devs">
         <div class="dev"><div class="dot" id="d-sdr"></div><div><div class="n">RTL-SDR</div><div class="d" id="d-sdr-t">scanning…</div></div><label class="hwsw" id="sw-sdr" title="Use for ADS-B" style="display:none"><input type="checkbox" data-cfg="adsb_enabled"><span></span></label></div>
+        <div class="dev"><div class="dot" id="d-hrf"></div><div><div class="n">HackRF</div><div class="d" id="d-hrf-t">scanning…</div></div><label class="hwsw" id="sw-hrf" title="Use for ADS-B" style="display:none"><input type="checkbox" data-cfg="adsb_enabled"><span></span></label></div>
         <div class="dev"><div class="dot" id="d-pp"></div><div><div class="n">PortaPack</div><div class="d" id="d-pp-t">scanning…</div></div><label class="hwsw" id="sw-pp" title="Use for ADS-B" style="display:none"><input type="checkbox" data-cfg="adsb_enabled"><span></span></label></div>
         <div class="dev"><div class="dot" id="d-mesh"></div><div><div class="n" id="d-mesh-n">Mesh</div><div class="d" id="d-mesh-t">scanning…</div></div><label class="hwsw" id="sw-mesh" title="Use mesh radios" style="display:none"><input type="checkbox" data-cfg="mesh_enabled"><span></span></label></div>
         <div id="hw-dyn" style="display:contents"></div>
@@ -939,7 +942,6 @@ function battMeta(o,linked){
   if(r!=null&&r>0.3){ state='charging'; cls='good'; }
   else if(r!=null&&r<-0.3){ const h=p/(-r); state=`on battery · ~${h>=10?Math.round(h):h.toFixed(1)} h left (est.)`; }
   else if(r!=null&&p>=97) state='full';
-  else if(p===0) state='gauge reads 0%';
   const tip=[o.batt_mv?`cell ${(o.batt_mv/1000).toFixed(2)} V`:'',r!=null?`rate ${r>0?'+':''}${r.toFixed(1)}%/h`:'',
     p===0?'A running board at 0% is on outside power, or its cell is missing or flat':''].filter(Boolean).join(' · ');
   return `<div class="${cls} w2" title="${escHtml(tip)}"><i>batt</i>${battIcon(p)}${p}%${o.batt_mv?` · ${(o.batt_mv/1000).toFixed(2)} V`:''}`
@@ -1111,17 +1113,27 @@ function render(s){
     }
   }
   // devices
-  const sdr=s.devices.rtlsdr||{}, mesh=s.devices.mesh||{}, pp=s.devices.portapack||{};
+  const sdr=s.devices.rtlsdr||{}, mesh=s.devices.mesh||{}, pp=s.devices.portapack||{}, hrf=s.devices.hackrf||{};
   // Which radio is actually feeding aircraft right now ("rtlsdr" | "mayhem" | "").
   const adsbActive = (s.config&&s.config.adsb_active_source)||"";
   // Red means "you need to do something". A missing RTL-SDR while the PortaPack
   // feeds aircraft is not that - show it neutral.
   setDot("#d-sdr", sdr.present ? (sdr.driver_ok===false ? "warn" : "on")
-                               : (adsbActive==="mayhem" ? "" : "off"));
+                               : (adsbActive==="mayhem"||adsbActive==="hackrf" ? "" : "off"));
   $("#d-sdr-t").textContent = sdr.present
       ? (sdr.driver_ok===false ? (sdr.label+" — needs WinUSB driver") : sdr.label)
       // Not having an RTL-SDR is not a fault when the PortaPack is the source.
-      : (adsbActive==="mayhem" ? "not detected — using PortaPack" : "not detected");
+      : (adsbActive==="mayhem" ? "not detected — using PortaPack"
+         : adsbActive==="hackrf" ? "not detected — using HackRF" : "not detected");
+  // HackRF One or Pro: run here and decoded by dump1090.
+  const hrfActive = adsbActive==="hackrf";
+  setDot("#d-hrf", !hrf.present ? "off" : !hrfActive ? ""
+       : (hrf.state==="streaming" && !hrf.no_signal) ? "on" : "warn");
+  $("#d-hrf-t").textContent = !hrf.present ? "not detected"
+      : !hrfActive ? `${hrf.label||"HackRF"} · standby (RTL-SDR in use)`
+      : hrf.state==="streaming" ? (hrf.no_signal ? `${hrf.label} — no signal, check the antenna`
+                                                 : `${hrf.label} · ${(hrf.msps||0).toFixed(1)} Msps`)
+      : hrf.error ? `${hrf.label||"HackRF"} — ${hrf.error}` : `${hrf.label||"HackRF"} — starting…`;
   // A connected PortaPack whose log stopped growing is NOT healthy: the console
   // still answers, so "connected" alone would show green while nothing is fed.
   const ppStall = (pp.stalled_for!=null && pp.stalled_for > 300) ? Math.round(pp.stalled_for/60) : 0;
@@ -1132,8 +1144,10 @@ function render(s){
   setDot("#d-pp", !pp.present ? (adsbActive==="rtlsdr" ? "" : "off")
                 : !ppActive   ? ""
                 : (pp.connected && !ppStall) ? "on" : "warn");
+  if(pp.present && pp.switching){ setDot("#d-pp","warn"); }
   $("#d-pp-t").textContent = !pp.present ? "not detected"
-      : !ppActive ? `${pp.port} · standby (RTL-SDR in use)`
+      : pp.switching ? `${pp.port} · switching to HackRF mode…`
+      : !ppActive ? `${pp.port} · standby (${adsbActive==="hackrf"?"HackRF":"RTL-SDR"} in use)`
       : pp.connected
           ? (ppStall ? `${pp.port} — no data for ${ppStall}m (stalled)`
                      : `${pp.port} · ${pp.aircraft||0} aircraft`)
@@ -1160,12 +1174,15 @@ function render(s){
   // Only hardware that is plugged in is listed; unplugging a radio drops its tile.
   $("#d-sdr").closest('.dev').style.display=sdr.present?'':'none';
   $("#d-pp").closest('.dev').style.display=pp.present?'':'none';
+  $("#d-hrf").closest('.dev').style.display=hrf.present?'':'none';
+  hwSwitch("#sw-hrf", hrf.present, cc.adsb_enabled!==false);
   hwSwitch("#sw-sdr", sdr.present, cc.adsb_enabled!==false);
   hwSwitch("#sw-pp", pp.present, cc.adsb_enabled!==false);
   hwSwitch("#sw-mesh", mesh.present||mdevs.length, cc.mesh_enabled!==false);
   if(cc.adsb_enabled===false){
     if(sdr.present){ setDot("#d-sdr",""); $("#d-sdr-t").textContent=sdr.label+" · off"; }
     if(pp.present){ setDot("#d-pp",""); $("#d-pp-t").textContent=pp.port+" · off"; }
+    if(hrf.present){ setDot("#d-hrf",""); $("#d-hrf-t").textContent=(hrf.label||"HackRF")+" · off"; }
   }
   if(cc.mesh_enabled===false && (mesh.present||mdevs.length)){ setDot("#d-mesh",""); $("#d-mesh-t").textContent="off"; }
   $("#d-up").textContent = s.upload_in_progress ? "UPLOADING…" : "idle";
@@ -1308,7 +1325,13 @@ function renderPrereqs(p){
       <div><div class="s">${c.name} <span class="m">— ${c.status}</span></div>
         ${c.detail?`<div class="m">${c.detail}</div>`:''}
         ${!c.ok&&c.fix?`<div class="fix">▶ ${c.fix} ${c.url?`<a href="${c.url}" target="_blank">${c.url}</a>`:''}</div>`:''}
+        ${!c.ok&&c.action==='install-dump1090'?`<button class="btn ghost" type="button" style="margin-top:6px" onclick="installDecoder(this)">Install now</button>`:''}
       </div></div>`).join('');
+}
+async function installDecoder(b){
+  b.disabled=true; b.textContent='Downloading…';
+  await api('/api/install-dump1090','POST',{});
+  setTimeout(poll,800);
 }
 
 let _lastEventSig='';
@@ -1410,11 +1433,11 @@ async function saveSettings(m){
   else{m.textContent="✗ "+(r.error||"error");m.className="msg err";}
 }
 // ---- detail modals ----
-function closeModal(){ $("#modal").classList.remove('show'); }
+function closeModal(){ $("#modal").classList.remove('show'); document.documentElement.classList.remove('locked'); }
 function openModal(html, mag){
   const sh=$("#sheet"); sh.className='sheet'+(mag?' mag':''); sh.style.width='';
   sh.innerHTML=`<span class="x" onclick="closeModal()">×</span>`+html;
-  $("#modal").classList.add('show');
+  $("#modal").classList.add('show'); document.documentElement.classList.add('locked');
 }
 const AC_CAT={a0:'—',a1:'Light',a2:'Small',a3:'Large',a4:'Large (high-vortex)',a5:'Heavy',a6:'High-performance',
   a7:'Rotorcraft',b1:'Glider',b2:'Lighter-than-air',b3:'Parachutist',b4:'Ultralight',b6:'UAV',b7:'Space',
