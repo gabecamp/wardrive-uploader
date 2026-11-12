@@ -553,6 +553,19 @@ class BoardGps:
 
 
 def windows_country() -> str | None:
+    import sys
+    if sys.platform != "win32":
+        # The Wi-Fi regulatory domain, then the locale (en_AU.UTF-8 -> AU).
+        import os
+        import re
+        import subprocess
+        try:
+            reg = subprocess.run(["iw", "reg", "get"], capture_output=True, text=True, timeout=5).stdout
+        except (OSError, subprocess.SubprocessError):
+            reg = ""
+        m = re.search(r"country ([A-Z]{2}):", reg) or re.match(
+            r"[a-z]+_([A-Z]{2})", os.environ.get("LC_ALL") or os.environ.get("LANG") or "")
+        return m.group(1) if m else None
     try:
         import ctypes
         buf = ctypes.create_unicode_buffer(16)

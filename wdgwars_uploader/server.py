@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import sys
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +28,27 @@ def _load(name: str, fallback: bytes) -> bytes:
         return (_WEBDIR / name).read_bytes()
     except OSError:
         return fallback
+
+
+# The dashboard is shared with the Windows build, so its Windows-only wording is
+# swapped as the page is served instead of forking the 180 KB file.
+_LINUX_WORDS = (
+    ("Start with Windows", "Start at login"),
+    ("needs WinUSB driver", "held by the kernel TV driver"),
+    ("needs WinUSB", "needs USB access"),
+    ("Approve the Windows prompt to install it.", "It installs by itself."),
+    ("waiting for the Windows prompt…", "merging…"),
+    ('title="COM port"', 'title="Serial port"'),
+)
+
+
+def _localise(html: bytes) -> bytes:
+    import sys
+    if sys.platform == "win32":
+        return html
+    for old, new in _LINUX_WORDS:
+        html = html.replace(old.encode(), new.encode())
+    return html
 
 
 def _no_nan(o: Any) -> Any:
@@ -245,7 +267,9 @@ class _HTTPServer(ThreadingHTTPServer):
     # Exclusive bind: on Windows the default (SO_REUSEADDR) lets a second process
     # bind the same port, splitting connections. False makes bind() fail when the
     # port is taken, so the port-fallback loop below picks the next free one.
-    allow_reuse_address = False
+    # Off Windows SO_REUSEADDR never lets two listeners share a port; it only lets a
+    # restart rebind while the old sockets linger, so the dashboard stays on 8787.
+    allow_reuse_address = sys.platform != "win32"
     daemon_threads = True
 
 
@@ -262,7 +286,7 @@ class DashboardServer:
         return f"http://{self.host}:{self.port}/"
 
     def start(self) -> str:
-        html = _load("dashboard.html", b"<h1>dashboard.html missing</h1>")
+        html = _localise(_load("dashboard.html", b"<h1>dashboard.html missing</h1>"))
         map_html = _load("map.html", b"<h1>map.html missing</h1>")
         last_err = None
         for port in range(self.port, self.port + 20):

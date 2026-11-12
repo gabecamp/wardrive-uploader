@@ -46,6 +46,27 @@ It runs in the tray, finds the hardware you plug in and uses it. No setup per de
 
 Windows and something to collect with: the PC's own Wi-Fi and Bluetooth are enough to start. Grab the MSI from [Releases](https://github.com/RocketGod-git/wardrive-uploader/releases/latest), or run from source with Python 3.11+. Add a key for any of [WiGLE](https://wigle.net/account), [WDGWars](https://wdgwars.pl/profile), [Wardrift](https://wardrift.net) and [wpa-sec](https://wpa-sec.stanev.org/?get_key).
 
+### Linux and Raspberry Pi
+
+This fork also runs on Debian, Raspberry Pi OS and DietPi with a desktop session (tested on a Pi 3B+ under sway with waybar).
+
+```sh
+git clone https://github.com/RocketGod-git/wardrive-uploader && cd wardrive-uploader
+sudo ./install-linux.sh
+./run-linux.sh
+```
+
+What differs from Windows:
+
+- **Wi-Fi** scans through nl80211. The app has to run as root to ask for scans; otherwise it reads what the system already scanned.
+- **Location** comes from gpsd in place of Windows location. When gpsd is running it owns USB receivers, so the app reads them through it.
+- **ADS-B** uses `readsb` (or a `dump1090` already on the PATH) in place of the bundled Windows decoder. A decoder running as a system service is picked up from `/run/readsb/aircraft.json`.
+- **Monitor-mode adapters** are taken from their kernel driver when the app opens them, which replaces the Zadig step.
+- **Tray** is the desktop's own menu (needs a bar with a tray, such as waybar), not the styled popup.
+- **Start at login** writes an XDG autostart entry, plus a sway `exec` file when it may.
+- **Updates** merge the release tag into the checkout with git, then restart the app.
+- Settings live in `~/.config/WardriveUploader/`.
+
 On the road? [Wardrive Go](https://play.google.com/store/apps/details?id=com.rocketgod.wardrive) does all of this on Android and [iPhone](https://apps.apple.com/app/id6783390938).
 
 ## 🤝 Community

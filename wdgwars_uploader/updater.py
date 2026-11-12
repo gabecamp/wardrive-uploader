@@ -16,6 +16,8 @@ import logging
 import os
 import re
 import ctypes
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -92,6 +94,13 @@ def frozen() -> bool:
     return bool(getattr(sys, "frozen", False)) and sys.platform == "win32"
 
 
+def _git_root() -> Path | None:
+    """Off Windows the app runs from a git checkout, and updates by merging the release tag."""
+    root = Path(__file__).resolve().parent.parent
+    ok = sys.platform != "win32" and (root / ".git").exists() and shutil.which("git")
+    return root if ok else None
+
+
 class Updater:
     def __init__(self, on_quit: Callable[[], None], on_event: Callable[[str], None]) -> None:
         self.on_quit, self.on_event = on_quit, on_event
@@ -100,7 +109,7 @@ class Updater:
         self.status: dict[str, Any] = {
             "current": __version__, "latest": "", "available": False, "checked": 0.0,
             "phase": "idle", "progress": 0, "error": "", "notes": "", "page": "",
-            "can_install": frozen(),
+            "can_install": frozen() or _git_root() is not None,
         }
         self._report_last_install()
 
@@ -116,7 +125,8 @@ class Updater:
             tag = str(rel.get("tag_name") or "")
             asset = next((a for a in rel.get("assets") or []
                           if str(a.get("name", "")).lower().endswith(".msi")), None)
-            newer = parse_version(tag) > parse_version(__version__) and asset is not None
+            newer = parse_version(tag) > parse_version(__version__) and (asset is not None
+                                                                         or _git_root() is not None)
             with self._lock:
                 self._release = {"tag": tag, "asset": asset or {}}
             self.status.update(latest=tag.lstrip("v"), available=newer, checked=time.time(),
@@ -131,15 +141,50 @@ class Updater:
         """Start the download and install in the background."""
         if not self.status["available"] or self.status["phase"] in ("downloading", "installing"):
             return self.status
-        if not frozen():
+        if not frozen() and _git_root() is None:
             self.status["error"] = "updates install from the installed app only"
             return self.status
         self.status.update(phase="downloading", progress=0, error="")
         threading.Thread(target=self._install, name="wdgw-update", daemon=True).start()
         return self.status
 
+    def _install_git(self, root: Path) -> None:
+        """Merge the release tag into this checkout, refresh the packages and start again."""
+        with self._lock:
+            tag = str(self._release.get("tag") or "")
+        if not re.fullmatch(r"v?\d+(\.\d+)*", tag):
+            raise ValueError("unexpected release tag")
+
+        def git(*args: str) -> subprocess.CompletedProcess:
+            return subprocess.run(["git", "-C", str(root), "-c", "user.name=Wardrive Uploader",
+                                   "-c", "user.email=updater@localhost", *args],
+                                  capture_output=True, text=True, timeout=300)
+
+        got = git("fetch", f"https://github.com/{REPO}", f"refs/tags/{tag}:refs/tags/{tag}")
+        if got.returncode:
+            raise OSError(f"could not fetch {tag}: {got.stderr.strip()[-200:]}")
+        self.status.update(progress=50)
+        if git("merge", "--no-edit", tag).returncode:
+            git("merge", "--abort")
+            raise OSError(f"{tag} does not merge cleanly into this checkout; merge it by hand")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", str(root / "requirements.txt")],
+                       capture_output=True, timeout=900)
+        (config_dir() / "update_result.json").write_text('{"code": 0}', encoding="ascii")
+        self.status.update(phase="installing", progress=100)
+        self.on_event(f"Installing update {self.status['latest']}; the app will reopen when it is done")
+        time.sleep(2.5)
+        # Started a few seconds late so this copy has let go of the lock and its ports.
+        subprocess.Popen(["sh", "-c", 'sleep 5; exec "$0" "$1" --boot', sys.executable, str(root / "run_app.py")],
+                         start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+        self.on_quit()
+
     def _install(self) -> None:
         try:
+            root = _git_root()
+            if root is not None and not frozen():
+                self._install_git(root)
+                return
             msi = self._download()
             self.status.update(phase="approve", progress=100)
             err = self._launch_helper(msi)

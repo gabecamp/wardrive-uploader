@@ -160,7 +160,10 @@ def config_dir() -> Path:
     global _DIR, MOVE_ERROR
     if _DIR is not None:
         return _DIR
-    base = Path(os.environ.get("APPDATA") or str(Path.home()))
+    if os.name == "nt":
+        base = Path(os.environ.get("APPDATA") or str(Path.home()))
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     d, old = base / "WardriveUploader", base / "WDGWarsUploader"
     if old.is_dir() and not d.exists():
         try:

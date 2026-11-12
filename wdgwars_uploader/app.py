@@ -108,6 +108,10 @@ class UploaderApp:
                 active = bool(det and (det.adsb_radio_present or det.mesh_present)) and bool(self.cfg.get("api_key"))
                 self._icon.icon = self._tray_icon(active, self.state.upload_in_progress)
                 self._icon.title = f"{APP_NAME} — {self._status_text()}"
+                shown = (self._status_text(), self.updater.status.get("available"), autostart.is_enabled())
+                if sys.platform != "win32" and shown != getattr(self, "_menu_shown", None):
+                    self._menu_shown = shown
+                    self._icon.update_menu()
             self._stop.wait(4.0)
 
     def _update_loop(self) -> None:
@@ -206,16 +210,32 @@ class UploaderApp:
             return pystray.MenuItem(label, lambda i, it: self.set_interval(h),
                                     checked=lambda it, hh=h: int(self.cfg.get("interval_hours", 4)) == hh,
                                     radio=True)
+        win = sys.platform == "win32"
+        # Off Windows there is no styled popup, so its extra actions live in this menu.
+        extra = [] if win else [
+            pystray.MenuItem(lambda it: f"Update to {self.updater.status.get('latest')}",
+                             lambda i, it: self.updater.install(),
+                             visible=lambda it: bool(self.updater.status.get("available")
+                                                     and self.updater.status.get("can_install"))),
+            pystray.MenuItem("Live map", lambda i, it: self._popup.actions["map"]()),
+        ]
+        links = [] if win else [
+            pystray.MenuItem("The Pirates' Plunder", lambda i, it: self._popup.actions["tpp"]()),
+            pystray.MenuItem("rocketgod.dev", lambda i, it: self._popup.actions["site"]()),
+            pystray.Menu.SEPARATOR,
+        ]
         return pystray.Menu(
             pystray.MenuItem(lambda it: self._status_text(), None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Open dashboard", lambda i, it: self.open_dashboard(), default=True),
             pystray.MenuItem("Upload now", lambda i, it: self.trigger_upload()),
+            *extra,
             pystray.MenuItem("Interval", pystray.Menu(*[interval_item(h) for h in INTERVAL_CHOICES_HOURS])),
-            pystray.MenuItem("Start on Windows boot", lambda i, it: self._toggle_boot(),
+            pystray.MenuItem("Start on Windows boot" if win else "Start at login", lambda i, it: self._toggle_boot(),
                              checked=lambda it: autostart.is_enabled()),
             pystray.MenuItem("Open log / config folder", lambda i, it: self._open_folder()),
             pystray.Menu.SEPARATOR,
+            *links,
             pystray.MenuItem("Quit", lambda i, it: self.quit()),
         )
 
@@ -319,6 +339,9 @@ class UploaderApp:
 
     def _open_folder(self) -> None:
         try:
+            if sys.platform != "win32":
+                subprocess.Popen(["xdg-open", str(config_dir())])
+                return
             os.startfile(str(config_dir()))  # type: ignore[attr-defined]
         except Exception:
             log.exception("could not open config folder")
@@ -458,7 +481,7 @@ def _dashboard_up() -> bool:
 
 def _pid_alive(pid: int) -> bool:
     if sys.platform != "win32":
-        return False
+        return watchdog._pid_alive(pid)
     try:
         out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
                              capture_output=True, text=True, timeout=10, creationflags=_NO_WINDOW)

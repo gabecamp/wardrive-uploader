@@ -33,6 +33,10 @@ def check_dump1090(configured_exe: str = "") -> dict:
     exe = adsb.find_dump1090(configured_exe)
     if exe:
         return _check("ADS-B decoder (dump1090)", True, "installed", detail=exe)
+    if sys.platform != "win32":
+        return _check("ADS-B decoder (dump1090)", False, "not installed",
+                      fix="Click 'Install dump1090' to install readsb with apt (the app must run as "
+                          "root for that), or run: sudo apt install readsb")
     return _check("ADS-B decoder (dump1090)", False, "not installed",
                   fix="Click 'Install dump1090' to fetch the Windows build automatically, "
                       "or point Settings at a running dump1090 URL. If it was installed "
@@ -48,7 +52,22 @@ def rtlsdr_driver_state(rtlsdr_present: bool) -> dict:
     if not rtlsdr_present:
         return _check("RTL-SDR driver", True, "n/a (no RTL-SDR)")
     if sys.platform != "win32":
-        return _check("RTL-SDR driver", True, "n/a (non-Windows)")
+        import os
+        from pathlib import Path
+        for vid in Path("/sys/bus/usb/devices").glob("*/idVendor"):
+            dev = vid.parent
+            try:
+                if vid.read_text().strip() != "0bda" or not (dev / "idProduct").read_text().startswith("283"):
+                    continue
+                holder = Path(os.readlink(dev / f"{dev.name}:1.0" / "driver")).name
+            except OSError:
+                continue          # not the dongle, or no driver is bound: free for the decoder
+            if holder != "usbfs":  # usbfs is the decoder itself
+                return _check(
+                    "RTL-SDR driver", False, f"held by the kernel's TV driver ({holder})",
+                    fix="Blacklist it, then unplug and replug the dongle: "
+                        "echo 'blacklist dvb_usb_rtl28xxu' | sudo tee /etc/modprobe.d/blacklist-rtl.conf")
+        return _check("RTL-SDR driver", True, "free for the decoder")
     ps = (
         "$d = Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match 'VID_0BDA&PID_283[289]' } | Select-Object -First 1;"
         "if ($d) { $svc = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_Service' -ErrorAction SilentlyContinue).Data;"

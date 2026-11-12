@@ -652,6 +652,10 @@ class Ar9271:
                  "firmware RUNNING" if self.live_bcd == BCD_FIRMWARE else "ROM bootloader (no firmware)")
         log.info("AR9271: live bcdDevice=%s = %s",
                  "(read failed)" if self.live_bcd is None else f"{self.live_bcd:04x}", state)
+        try:   # Linux: take the adapter from its kernel driver. Windows has nothing to detach.
+            self.h.setAutoDetachKernelDriver(True)
+        except Exception:  # noqa: BLE001
+            pass
         self.h.claimInterface(0)
         # NB: endpoint halts are deliberately NOT cleared: CLEAR_FEATURE(ENDPOINT_HALT) flushes the
         # AR9271's one-shot HTC READY off interrupt pipe 0x83.

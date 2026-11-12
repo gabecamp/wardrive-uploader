@@ -22,6 +22,7 @@ import hashlib
 import io
 import json
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -69,8 +70,43 @@ def find_dump1090(configured_exe: str = "") -> str | None:
     for root in search:
         for cand in root.rglob("dump1090.exe"):
             return str(cand)
-    p = shutil.which("dump1090") or shutil.which("dump1090.exe")
-    return p
+    for name in ("dump1090", "dump1090.exe", "readsb", "dump1090-fa", "dump1090-mutability"):
+        p = shutil.which(name)
+        if p:
+            return p
+    return None
+
+
+def _linux_json() -> str | None:
+    """The aircraft.json a Linux decoder is writing right now: the one this app
+    launched, or a system service (the readsb and dump1090 packages run one)."""
+    if sys.platform == "win32":
+        return None
+    for p in (tools_dir() / "adsb" / "aircraft.json", Path("/run/readsb/aircraft.json"),
+              Path("/run/dump1090-fa/aircraft.json"), Path("/run/dump1090-mutability/aircraft.json")):
+        try:
+            if time.time() - p.stat().st_mtime < 60:
+                return str(p)
+        except OSError:
+            pass
+    return None
+
+
+def _linux_args(exe: str, cfg: dict[str, Any]) -> str:
+    """readsb and the Linux dump1090 builds take everything on the command line and
+    write aircraft.json to a folder instead of serving it."""
+    out = tools_dir() / "adsb"
+    out.mkdir(parents=True, exist_ok=True)
+    args = ["--net", "--quiet", "--write-json", str(out)]
+    if Path(exe).name == "readsb":
+        args += ["--device-type", "rtlsdr"]
+    home, gain = receiver_home(cfg), _valid_gain(cfg.get("dump1090_gain"))
+    if home is not None:
+        args += ["--lat", f"{home[0]:.6f}", "--lon", f"{home[1]:.6f}"]
+    if gain is not None:
+        args += ["--gain", f"{gain:g}"]
+    extra = str(cfg.get("dump1090_args") or "")
+    return " ".join(args + ([] if extra.strip() == "--net" else extra.split()))
 
 
 def install_dump1090(progress: Callable[[str], None] | None = None) -> str:
@@ -85,6 +121,18 @@ def install_dump1090(progress: Callable[[str], None] | None = None) -> str:
     if existing:
         say("already installed")
         return existing
+
+    if sys.platform != "win32":
+        if os.geteuid() != 0:
+            raise RuntimeError("needs root; run: sudo apt install readsb")
+        say("installing readsb with apt…")
+        res = subprocess.run(["apt-get", "install", "-y", "readsb"], capture_output=True, text=True, timeout=900,
+                             env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"})
+        exe = find_dump1090()
+        if res.returncode or not exe:
+            raise RuntimeError((res.stderr.strip().splitlines() or ["apt could not install readsb"])[-1])
+        say("installed")
+        return exe
 
     say("downloading dump1090 (~25 MB)…")
     resp = requests.get(DUMP1090_ZIP_URL, timeout=180)
@@ -398,7 +446,7 @@ def ensure_decoder(cfg: dict[str, Any], driver_ok: bool | None = None,
     # Something already serving aircraft (this decoder, an orphan, or a
     # separately started dump1090) is reused. A duplicate would fight for the
     # RTL-SDR and port 8080.
-    if _url_serving(url):
+    if _url_serving(url) or _linux_json():
         return True
     if is_running():
         return True
@@ -423,6 +471,8 @@ def ensure_decoder(cfg: dict[str, Any], driver_ok: bool | None = None,
         _kill_stray_decoders()   # clear any stuck/orphan instance first
         _prune_decoder_logs(Path(exe).parent)
         _apply_decoder_cfg(exe, receiver_home(cfg), cfg.get("dump1090_gain"))
+        if sys.platform != "win32":
+            return launch_dump1090(exe, _linux_args(exe, cfg))
         return launch_dump1090(exe, cfg.get("dump1090_args", "--net"))
 
 
@@ -444,4 +494,5 @@ def collect(cfg: dict[str, Any]) -> dict[str, Any] | None:
         obj = from_file(file)
         if obj is not None:
             return obj
-    return None
+    file = _linux_json()
+    return from_file(file) if file else None

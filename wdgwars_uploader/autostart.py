@@ -151,7 +151,22 @@ def _launch_command() -> str:
     return f'"{exe}" {args}'
 
 
+def _linux_entries() -> list[tuple[Path, str]]:
+    """(file, contents) that start the app with the desktop session on Linux."""
+    target = _run_target()
+    cmd = f'"{target[0]}" {target[1]}' if target else f'"{sys.executable}" -m wdgwars_uploader --boot'
+    base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return [
+        (base / "autostart" / "WardriveUploader.desktop",
+         f"[Desktop Entry]\nType=Application\nName=Wardrive Uploader\nExec={cmd}\n"),
+        # sway ignores XDG autostart; its stock config runs every file in this folder.
+        (Path("/etc/sway/config.d/90-wardrive-uploader.conf"), f"exec {cmd}\n"),
+    ]
+
+
 def is_enabled() -> bool:
+    if sys.platform == "linux":
+        return _linux_entries()[0][0].exists()
     if sys.platform != "win32":
         return False
     import winreg
@@ -164,6 +179,16 @@ def is_enabled() -> bool:
 
 
 def enable() -> bool:
+    if sys.platform == "linux":
+        ok = False
+        for path, text in _linux_entries():
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+                ok = True
+            except OSError as e:      # the sway folder needs root; the XDG entry does not
+                log.debug("auto-start entry %s not written: %s", path, e)
+        return ok
     if sys.platform != "win32":
         return False
     import winreg
@@ -180,6 +205,13 @@ def enable() -> bool:
 
 
 def disable() -> None:
+    if sys.platform == "linux":
+        for path, _ in _linux_entries():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        return
     if sys.platform != "win32":
         return
     import winreg

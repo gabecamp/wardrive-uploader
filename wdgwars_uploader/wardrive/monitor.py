@@ -9,6 +9,7 @@ to handshake and PMKID capture.
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from typing import Any, Callable
@@ -18,6 +19,12 @@ from .wifi import auth_mode
 from . import ar9271, mt7612u
 
 log = logging.getLogger("wdgwars.monitor")
+
+# What an adapter that cannot be opened is waiting for.
+if sys.platform == "win32":
+    NO_ACCESS = ("needs WinUSB", "switch this adapter to the WinUSB driver to use monitor mode")
+else:
+    NO_ACCESS = ("needs USB access", "this user may not open the adapter: run as root or add a udev rule for it")
 
 # (vid, pid) -> (driver class, chipset name)
 SUPPORTED = {vp: (mt7612u.Mt7612u, "MediaTek MT7612U") for vp in mt7612u.VID_PIDS}
@@ -115,7 +122,7 @@ class MonitorManager:
                                 continue
                             if a and a.thread and a.thread.is_alive():
                                 continue
-                            if a and a.state == "needs WinUSB" and time.monotonic() - getattr(a, "tried", 0) < 30:
+                            if a and a.state == NO_ACCESS[0] and time.monotonic() - getattr(a, "tried", 0) < 30:
                                 continue
                             if a and a.state == "needs replug":
                                 continue      # retried once it has been unplugged
@@ -159,7 +166,7 @@ class MonitorManager:
                     drv.open()
                 except usb1.USBError as e:
                     if e.value in (usb1.ERROR_ACCESS, usb1.ERROR_NOT_SUPPORTED, usb1.ERROR_NOT_FOUND):
-                        a.state, a.detail = "needs WinUSB", "switch this adapter to the WinUSB driver to use monitor mode"
+                        a.state, a.detail = NO_ACCESS
                         return
                     raise
                 a.state = "loading firmware"

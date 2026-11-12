@@ -19,6 +19,7 @@ import logging
 import math
 import re
 import socket
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -370,6 +371,62 @@ class WindowsGps(_Source):
             await asyncio.sleep(1)
 
 
+class GpsdGps(_Source):
+    """A receiver served by gpsd, the Linux location service."""
+
+    name = "gpsd"
+    id = "gps:gpsd"
+
+    def _run(self) -> None:
+        import json
+        while not self._stop.is_set():
+            try:
+                with socket.create_connection(("127.0.0.1", 2947), timeout=5) as s:
+                    s.sendall(b'?WATCH={"enable":true,"json":true}\n')
+                    s.settimeout(1.0)
+                    self.state, self.detail = "listening", ""
+                    buf = b""
+                    while not self._stop.is_set():
+                        try:
+                            chunk = s.recv(4096)
+                        except socket.timeout:
+                            if self.state == "fix" and not (self.fix and self.fix.age() < 5):
+                                self.state = "no fix yet"
+                            continue
+                        if not chunk:
+                            break
+                        *lines, buf = (buf + chunk).split(b"\n")
+                        for line in lines:
+                            try:
+                                self._report(json.loads(line))
+                            except ValueError:
+                                pass
+            except OSError as e:
+                self.state, self.detail = "unavailable", str(e)[:120]
+            self._stop.wait(3)
+
+    def _report(self, d: dict[str, Any]) -> None:
+        if d.get("class") != "TPV":
+            return
+        lat, lon = _finite(d.get("lat")), _finite(d.get("lon"))
+        if (d.get("mode") or 0) < 2 or lat is None or lon is None:
+            self.state = "no fix yet"
+            return
+        acc = max(_finite(d.get("epx")) or 0.0, _finite(d.get("epy")) or 0.0) or _finite(d.get("eph")) or 15.0
+        alt = _finite(d.get("altMSL"))
+        self.fix = Fix(lat, lon, alt if alt is not None else _finite(d.get("alt")), acc, _finite(d.get("speed")),
+                       _finite(d.get("track")), None, time.time(), time.monotonic(), "gpsd")
+        self.state, self.detail = "fix", str(d.get("device") or "")
+
+
+def gpsd_available() -> bool:
+    try:
+        socket.create_connection(("127.0.0.1", 2947), timeout=1).close()
+        return True
+    except OSError:
+        return False
+
+
 def gps_ports(exclude: set[str]) -> list[str]:
     """COM ports that identify as a GPS (u-blox, or GPS/GNSS in the name).
     Mesh radios and other boards are never opened unasked, since opening a
@@ -398,7 +455,15 @@ class GpsHub:
         """Every location source there is; the ones in ``off`` are listed but not run."""
         self.stop()
         srcs: list[_Source] = [SerialGps(p) for p in gps_ports(exclude)]
-        srcs += [NetworkGps(net_port), WindowsGps()]
+        if sys.platform == "win32":
+            srcs += [NetworkGps(net_port), WindowsGps()]
+        elif gpsd_available():
+            # ponytail: gpsd claims USB receivers itself and a second reader on the same
+            # port would split the data, so serial GPS is left to it. Ask gpsd which
+            # ports it holds (?DEVICES) if a receiver it ignores ever needs reading here.
+            srcs = [NetworkGps(net_port), GpsdGps()]
+        else:
+            srcs += [NetworkGps(net_port)]
         for s in srcs:
             if s.id in off:
                 s.state = "off"
@@ -431,4 +496,13 @@ def lan_addresses() -> list[str]:
                 out.append(ip)
     except OSError:
         pass
+    if not out:
+        # Linux often maps the hostname to 127.0.1.1 only: ask the routing table instead.
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("192.0.2.1", 9))        # no packet is sent
+                if not s.getsockname()[0].startswith("127."):
+                    out.append(s.getsockname()[0])
+        except OSError:
+            pass
     return out

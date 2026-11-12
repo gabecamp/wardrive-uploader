@@ -17,6 +17,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .mayhem import MAYHEM_IDS
 
@@ -167,8 +168,19 @@ def _rtlsdr_label(reported: str) -> str:
 
 
 def _rtlsdr_present() -> tuple[bool, str]:
-    """Detect an RTL-SDR via Windows PnP. Returns (present, label)."""
+    """Detect an RTL-SDR via Windows PnP, or sysfs on Linux. Returns (present, label)."""
     if sys.platform != "win32":
+        for vid in Path("/sys/bus/usb/devices").glob("*/idVendor"):
+            try:
+                if (int(vid.read_text(), 16), int((vid.parent / "idProduct").read_text(), 16)) not in RTLSDR_IDS:
+                    continue
+            except (OSError, ValueError):
+                continue
+            try:
+                label = (vid.parent / "product").read_text().strip()
+            except OSError:
+                label = ""
+            return True, _rtlsdr_label(label or "RTL2832U")
         return False, ""
     # Build a regex of VID_xxxx&PID_xxxx patterns for the known IDs.
     patterns = "|".join(f"VID_{v:04X}&PID_{p:04X}" for v, p in RTLSDR_IDS)

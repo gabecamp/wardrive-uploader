@@ -9,3 +9,4 @@
 *.ico binary
 *.uf2 binary
 *.gz binary
+*.sh text eol=lf

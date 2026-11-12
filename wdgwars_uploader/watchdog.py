@@ -55,6 +55,12 @@ def _heartbeat_age() -> float | None:
 
 
 def _kill(pid: int) -> None:
+    if sys.platform != "win32":
+        try:
+            os.kill(pid, 9)
+        except OSError as e:
+            log.warning("could not kill pid %s: %s", pid, e)
+        return
     try:
         subprocess.run(["taskkill", "/F", "/PID", str(pid)],
                        capture_output=True, timeout=10, creationflags=_NO_WINDOW)
@@ -141,15 +147,21 @@ def _watchdog_cmd(pid: int) -> list[str]:
 
 def spawn(app_pid: int) -> None:
     """Launch a detached watchdog watching ``app_pid``."""
-    if sys.platform != "win32":
+    if sys.platform not in ("win32", "linux"):
         return
     try:
-        subprocess.Popen(_watchdog_cmd(app_pid), creationflags=_NO_WINDOW, **_DETACH)
+        subprocess.Popen(_watchdog_cmd(app_pid), creationflags=_NO_WINDOW,
+                         start_new_session=sys.platform != "win32", **_DETACH)
     except Exception as e:
         log.warning("could not spawn watchdog: %s", e)
 
 
 def _pid_alive(pid: int) -> bool:
+    if sys.platform != "win32":
+        try:   # a zombie still has a /proc entry but is gone for our purposes
+            return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+        except (OSError, IndexError):
+            return False
     try:
         out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
                              capture_output=True, text=True, timeout=10, creationflags=_NO_WINDOW)
@@ -182,7 +194,7 @@ def _crash_looping() -> bool:
 def run(app_pid: int) -> None:
     """Watch ``app_pid``; when it exits, restart the app unless it stopped
     cleanly or is crash-looping."""
-    if sys.platform != "win32":
+    if sys.platform not in ("win32", "linux"):
         return
     time.sleep(10)   # grace period so a just-started app isn't judged as hung
     while _pid_alive(app_pid):
@@ -200,6 +212,7 @@ def run(app_pid: int) -> None:
         return
     log.warning("app died unexpectedly (pid %s); restarting", app_pid)
     try:
-        subprocess.Popen(_app_cmd(), creationflags=_NO_WINDOW, **_DETACH)
+        subprocess.Popen(_app_cmd(), creationflags=_NO_WINDOW,
+                         start_new_session=sys.platform != "win32", **_DETACH)
     except Exception as e:
         log.warning("restart failed: %s", e)

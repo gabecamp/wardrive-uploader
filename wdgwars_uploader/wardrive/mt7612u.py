@@ -208,6 +208,10 @@ class Mt7612u:
             self.serial = self.device.getSerialNumber() or ""
         except Exception:
             self.serial = ""
+        try:   # Linux: take the adapter from its kernel driver. Windows has nothing to detach.
+            self.h.setAutoDetachKernelDriver(True)
+        except Exception:  # noqa: BLE001
+            pass
         self.h.claimInterface(0)
         ins, outs = [], []
         for setting in self.device[0][0]:
