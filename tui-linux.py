@@ -221,6 +221,7 @@ def page_keys(s):
             (f"  k  WDGWars key        {yes(cfg.get('has_api_key'))}", "amb"),
             (f"  w  WiGLE name+token   {yes(cfg.get('has_wigle'))}   {cfg.get('wigle_api_name') or ''}", "amb"),
             (f"  f  wpa-sec key        {yes(cfg.get('has_wpasec'))}", "amb"),
+            (f"  d  Wardrift upload key {yes(cfg.get('has_wardrift_key'))}", "amb"),
             ("", "amb"),
             ("Wardrift sign-in needs a password, so it stays on the dashboard.", "dim")]
 
@@ -373,7 +374,8 @@ def act(url, page, s, key, scr, ctx):
             return "press I again to install the update", False
     if name == "Keys":
         fields = {ord("k"): ("api_key", "WDGWars key", True),
-                  ord("f"): ("wpasec_key", "wpa-sec key", True)}
+                  ord("f"): ("wpasec_key", "wpa-sec key", True),
+                  ord("d"): ("wardrift_api_key", "Wardrift upload key", True)}
         if key in fields:
             field, label, secret = fields[key]
             typed = prompt(scr, label, secret, h, wd)
