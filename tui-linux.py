@@ -148,8 +148,13 @@ def page_uploads(s, extra):
              f"pending mesh {s.get('pending', {}).get('mesh', 0)}", "amb"),
             ("", "amb"),
             ("RECENT EVENTS", "hi")]
-    for e in (s.get("events") or [])[-6:]:
-        rows.append((f"  {str(e)[:90]}", "amb"))
+    for e in (s.get("events") or [])[:6]:  # the app keeps newest first
+        if isinstance(e, dict):
+            t = e.get("t")
+            when = time.strftime("%H:%M:%S", time.localtime(t)) if isinstance(t, (int, float)) else "--:--:--"
+            rows.append((f"  {when}  {str(e.get('msg', ''))[:80]}", "amb"))
+        else:
+            rows.append((f"  {str(e)[:90]}", "amb"))
     rows.append(("", "amb"))
     rows.append(("UPLOAD HISTORY (WiGLE)", "hi"))
     if extra.get("error"):
