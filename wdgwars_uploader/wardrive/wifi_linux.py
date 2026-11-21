@@ -5,15 +5,19 @@ adapter to scan, then reads its BSS list and returns only entries heard within
 the last few seconds. Talks generic netlink directly, so the raw information
 elements reach :func:`.wifi.auth_mode` unchanged and no extra package is needed.
 
-Triggering a scan needs root or CAP_NET_ADMIN. Without it the kernel's cached
-list (filled by whatever else scans, e.g. wpa_supplicant) is still read.
+Triggering a scan needs root or CAP_NET_ADMIN. Without it the scan is asked of
+NetworkManager (``nmcli device wifi rescan``), which a desktop user, or one a
+polkit rule allows (linux/50-wardrive-wifi-scan.rules), may do. Failing both,
+the kernel's cached list (filled by whatever else scans) is still read.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import struct
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -54,6 +58,19 @@ def _ssid(ies: bytes) -> str:
             return raw.decode("utf-8", "replace") if any(raw) else ""
         i += 2 + ln
     return ""
+
+
+def _nm_rescan(ifname: str) -> bool:
+    """Ask NetworkManager to scan ``ifname``. True when it accepted."""
+    nmcli = shutil.which("nmcli")
+    if not nmcli:
+        return False
+    try:
+        res = subprocess.run([nmcli, "device", "wifi", "rescan", "ifname", ifname],
+                             capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return res.returncode == 0
 
 
 def _describe(ifname: str) -> str:
@@ -144,7 +161,10 @@ class WifiScanner:
                 self._request(_TRIGGER_SCAN, _ACK, req)
                 self._denied.discard(name)
             except PermissionError:
-                self._denied.add(name)
+                if _nm_rescan(ifname):
+                    self._denied.discard(name)
+                else:
+                    self._denied.add(name)
             except OSError:
                 pass                              # busy with a scan already, or the interface is down
         return ifs

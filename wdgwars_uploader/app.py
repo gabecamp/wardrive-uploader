@@ -104,15 +104,27 @@ class UploaderApp:
             self.state.next_run_ts = self.scheduler.next_run_ts
             self.state.interval_hours = int(self.cfg.get("interval_hours", 4))
             if self._icon:
-                det = self.core.last_detect
-                active = bool(det and (det.adsb_radio_present or det.mesh_present)) and bool(self.cfg.get("api_key"))
-                self._icon.icon = self._tray_icon(active, self.state.upload_in_progress)
-                self._icon.title = f"{APP_NAME} — {self._status_text()}"
-                shown = (self._status_text(), self.updater.status.get("available"), autostart.is_enabled())
-                if sys.platform != "win32" and shown != getattr(self, "_menu_shown", None):
-                    self._menu_shown = shown
-                    self._icon.update_menu()
+                # A tray backend that can't do something (pystray's dummy backend on a
+                # desktop with no tray, an X11 tray without a dock) must not take down
+                # this thread: it carries the heartbeat, and the watchdog restarts the
+                # whole app, decoder included, when the heartbeat stops.
+                try:
+                    self._refresh_tray()
+                except Exception as e:  # noqa: BLE001
+                    if not getattr(self, "_tray_warned", False):
+                        self._tray_warned = True
+                        log.warning("tray icon update failed, carrying on without it: %r", e)
             self._stop.wait(4.0)
+
+    def _refresh_tray(self) -> None:
+        det = self.core.last_detect
+        active = bool(det and (det.adsb_radio_present or det.mesh_present)) and bool(self.cfg.get("api_key"))
+        self._icon.icon = self._tray_icon(active, self.state.upload_in_progress)
+        self._icon.title = f"{APP_NAME} — {self._status_text()}"
+        shown = (self._status_text(), self.updater.status.get("available"), autostart.is_enabled())
+        if sys.platform != "win32" and shown != getattr(self, "_menu_shown", None):
+            self._menu_shown = shown
+            self._icon.update_menu()
 
     def _update_loop(self) -> None:
         """Check for a new release shortly after start, then every few hours."""
